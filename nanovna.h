@@ -41,6 +41,8 @@
 #define FREQUENCY_OFFSET         8000
 // Frequency offset for 48k ADC (sin_cos table in dsp.c generated for 3k, 4k, 5k, 6k, if change need create new table )
 //#define FREQUENCY_OFFSET         5000
+// Apply calibration after made sweep, (if set 1, then calibration move out from sweep cycle)
+#define APPLY_CALIBRATION_AFTER_SWEEP 0
 // Use real time build table (undef for use constant)
 //#define USE_VARIABLE_OFFSET
 // Speed of light const
@@ -111,7 +113,8 @@ enum stimulus_type {
 
 void set_sweep_frequency(int type, uint32_t frequency);
 uint32_t get_sweep_frequency(int type);
-uint32_t get_bandwidth_frequency(void);
+void set_bandwidth(uint16_t bw_count);
+uint32_t get_bandwidth_frequency(uint16_t bw_freq);
 
 double my_atof(const char *p);
 
@@ -128,9 +131,9 @@ extern const char *info_about[];
 /*
  * dsp.c
  */
-// 5ms @ 96kHz
-// Define aic3204 source clock frequency (for 8MHz used fractional multiplier, and possible little phase error)
+// Define aic3204 source clock frequency (on 8MHz used fractional multiplier, and possible little phase error)
 #define AUDIO_CLOCK_REF       ( 8000000U)
+// Define aic3204 source clock frequency (on 10752000U used integer multiplier)
 //#define AUDIO_CLOCK_REF       (10752000U)
 // Disable AIC PLL clock, use input as CODEC_CLKIN (not stable on some devices, on long work)
 //#define AUDIO_CLOCK_REF       (86016000U)
@@ -144,9 +147,18 @@ extern const char *info_about[];
 #define AUDIO_BUFFER_LEN      (AUDIO_SAMPLES_COUNT*2)
 
 // Bandwidth depend from AUDIO_SAMPLES_COUNT and audio ADC frequency
-// for AUDIO_SAMPLES_COUNT = 48 and ADC = 96kHz one measure give 96000/48=2000Hz
-// define additional measure count
-#if AUDIO_ADC_FREQ/AUDIO_SAMPLES_COUNT == 2000
+// for AUDIO_SAMPLES_COUNT = 48 and ADC =  48kHz one measure give  48000/48=1000Hz
+// for AUDIO_SAMPLES_COUNT = 48 and ADC =  96kHz one measure give  96000/48=2000Hz
+// for AUDIO_SAMPLES_COUNT = 48 and ADC = 192kHz one measure give 192000/48=4000Hz
+// Define additional measure count for menus
+#if AUDIO_ADC_FREQ/AUDIO_SAMPLES_COUNT == 4000
+#define BANDWIDTH_4000            (  1 - 1)
+#define BANDWIDTH_2000            (  2 - 1)
+#define BANDWIDTH_1000            (  4 - 1)
+#define BANDWIDTH_333             ( 12 - 1)
+#define BANDWIDTH_100             ( 40 - 1)
+#define BANDWIDTH_30              (132 - 1)
+#elif AUDIO_ADC_FREQ/AUDIO_SAMPLES_COUNT == 2000
 #define BANDWIDTH_2000            (  1 - 1)
 #define BANDWIDTH_1000            (  2 - 1)
 #define BANDWIDTH_333             (  6 - 1)
@@ -189,6 +201,8 @@ void tlv320aic3204_write_reg(uint8_t page, uint8_t reg, uint8_t data);
 #define LCD_WIDTH                   320
 #define LCD_HEIGHT                  240
 
+// Used marker size settings
+#define _USE_BIG_MARKER_     0
 // Used font settings
 #define _USE_FONT_           0
 
@@ -215,7 +229,8 @@ extern const uint8_t x7x11b_bits[];
 #elif _USE_FONT_ == 2
 extern const uint8_t x10x14_bits[];
 #define FONT_START_CHAR   0x17
-#define FONT_MAX_WIDTH      12
+#define FONT_MAX_WIDTH      14
+#define FONT_WIDTH          11
 #define FONT_GET_HEIGHT     14
 #define FONT_STR_HEIGHT     16
 #define FONT_GET_DATA(ch)   (   &x10x14_bits[(ch-FONT_START_CHAR)*2*FONT_GET_HEIGHT  ])
@@ -276,6 +291,7 @@ extern int16_t area_height;
 #define NUM_INPUT_HEIGHT   32
 
 // On screen keyboard button size
+// Use full screen keyboard
 #if 1
 #define KP_WIDTH                  ((LCD_WIDTH) / 4)                     // numeric keypad button width
 #define KP_HEIGHT                 ((LCD_HEIGHT - NUM_INPUT_HEIGHT) / 4) // numeric keypad button height
@@ -283,6 +299,7 @@ extern int16_t area_height;
 #define KP_GET_X(posx)            ((posx) * KP_WIDTH)                   // numeric keypad left
 #define KP_GET_Y(posy)            ((posy) * KP_HEIGHT)                  // numeric keypad top
 #else
+// Use less size keyboard
 #define KP_WIDTH     48
 #define KP_HEIGHT    48
 // Key x, y position (0 - 15) on screen
@@ -544,7 +561,7 @@ void rtc_set_time(uint32_t dr, uint32_t tr);
 
 #define CONFIG_MAGIC 0x434f4e45 /* 'CONF' */
 
-extern int16_t lastsaveid;
+extern uint16_t lastsaveid;
 
 #define frequency0 current_props._frequency0
 #define frequency1 current_props._frequency1
@@ -567,7 +584,7 @@ extern int16_t lastsaveid;
 
 int caldata_save(uint32_t id);
 int caldata_recall(uint32_t id);
-const properties_t *caldata_ref(uint32_t id);
+const properties_t *caldata_reference(void);
 
 int config_save(void);
 int config_recall(void);
@@ -630,7 +647,7 @@ void enter_dfu(void);
 
 void adc_init(void);
 uint16_t adc_single_read(uint32_t chsel);
-void adc_start_analog_watchdogd(uint32_t chsel);
+void adc_start_analog_watchdogd(void);
 void adc_stop(void);
 int16_t adc_vbat_read(void);
 

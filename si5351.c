@@ -41,33 +41,29 @@ static int32_t  current_offset = FREQUENCY_OFFSET;
 // Use cache for this reg, not update if not change
 static uint8_t  clk_cache[3] = {0, 0, 0};
 
-#if 1
-// Minimum value is 2, freq change apply at next dsp measure, and need skip it
-#define DELAY_NORMAL          2
-// Delay for bands (depend set band 1 more fast (can change before next dsp buffer ready, need wait additional interval)
-#define DELAY_BAND_1_2        2
-#define DELAY_BAND_3_4        2
-// Band changes need set additional delay after reset PLL
-#define DELAY_BANDCHANGE_1_2  3
-#define DELAY_BANDCHANGE_3_4  4
-// Delay after set new PLL values, and send reset (on band 1 unstable if less then 900, on 2000-5000 no amplitude spike on change)
-#define DELAY_RESET_PLL_BEFORE    1000
-#define DELAY_RESET_PLL_AFTER     3500
+// Generator ready delays, values in x100 us
+#if 0
+  uint16_t timings[16]={  3,  3, 10, 10, 0, 0, 30,  3, 25}; // For H  device timings
+//uint16_t timings[16]={  2,  2, 10, 10, 0, 0, 30,  3, 25}; // For H4 device timings
+void si5351_set_timing(int i, int v) {timings[i]=v;}
+#define DELAY_BAND_1_2           timings[0]   // Delay for bands
+#define DELAY_BAND_3_4           timings[1]   // Delay for bands
+#define DELAY_BANDCHANGE_1_2     timings[2]   // Band changes need set additional delay after reset PLL
+#define DELAY_BANDCHANGE_3_4     timings[3]   // Band changes need set additional delay after reset PLL
+#define DELAY_RESET_PLL_BEFORE   timings[4]   // Delay after set new PLL values
+#define DELAY_RESET_PLL_AFTER    timings[5]   // Delay after set new PLL values
+//#define DELAY_GAIN_CHANGE      timings[6]   // defined in main.c change gain delay
+//#define DELAY_CHANNEL_CHANGE   timings[7]   // defined in main.c switch channel delay
+//#define DELAY_SWEEP_START      timings[8]   // defined in main.c delay at sweep start
 
 #else
-// Debug timer set
-uint16_t timings[8]={2,2,2,3,4,1000, 3500};
-void si5351_set_timing(int i, int v) {timings[i]=v;}
-#define DELAY_NORMAL          timings[0]
-// Delay for bands (depend set band 1 more fast (can change before next dsp buffer ready, need wait additional interval)
-#define DELAY_BAND_1_2        timings[1]
-#define DELAY_BAND_3_4        timings[2]
-// Band changes need set additional delay after reset PLL
-#define DELAY_BANDCHANGE_1_2  timings[3]
-#define DELAY_BANDCHANGE_3_4  timings[4]
-// Delay after set new PLL values, and send reset (on band 1-2 unstable if less then 900, on 2000-5000 no amplitude spike on change)
-#define DELAY_RESET_PLL_BEFORE      timings[5]
-#define DELAY_RESET_PLL_AFTER       timings[6]
+#define DELAY_BAND_1_2           3    // Delay for bands 1-2
+#define DELAY_BAND_3_4           3    // Delay for bands 3-4
+#define DELAY_BANDCHANGE_1_2    10    // Band changes need set additional delay after reset PLL
+#define DELAY_BANDCHANGE_3_4    10    // Band changes need set additional delay after reset PLL
+// Delay after set new PLL values, and send reset
+#define DELAY_RESET_PLL_BEFORE   0    // 1000 possibly not need it if align freq
+#define DELAY_RESET_PLL_AFTER    0    // 3500 possibly not need it if align freq
 #endif
 
 uint32_t si5351_get_frequency(void)
@@ -147,6 +143,8 @@ si5351_init(void)
     si5351_bulk_write(p, len);
     p += len;
   }
+  // Set any (let it be 32MHz) frequency for AIC can run
+  si5351_set_frequency(32000000U, 0);
 }
 
 static const uint8_t disable_output[] = {
@@ -418,9 +416,6 @@ int
 si5351_set_frequency(uint32_t freq, uint8_t drive_strength)
 {
   uint8_t band;
-  if (freq == current_freq)
-    return DELAY_NORMAL;
-
   int delay;
   uint32_t ofreq = freq + current_offset;
 
@@ -450,6 +445,8 @@ si5351_set_frequency(uint32_t freq, uint8_t drive_strength)
     omul = 5;
   }
 #endif
+  if (freq == current_freq)
+    return 0;
   // Select optimal band for prepared freq
   if (freq <  10000U) {
      rdiv = SI5351_R_DIV_128;
@@ -472,7 +469,8 @@ si5351_set_frequency(uint32_t freq, uint8_t drive_strength)
   if (current_band != band) {
     si5351_reset_pll(SI5351_PLL_RESET_A | SI5351_PLL_RESET_B);
     // Possibly not need add delay now
-    chThdSleepMicroseconds(DELAY_RESET_PLL_BEFORE);
+    if (DELAY_RESET_PLL_BEFORE)
+      chThdSleepMicroseconds(DELAY_RESET_PLL_BEFORE);
   }
   static const uint8_t band_setting[] = {1, PLL_N_1, PLL_N_2, 8, 6, 4};
   switch (band) {
@@ -483,18 +481,14 @@ si5351_set_frequency(uint32_t freq, uint8_t drive_strength)
       if (current_band != band) {
         si5351_setupPLL(SI5351_REG_PLL_A,   pll_n, 0, 1);
         si5351_setupPLL(SI5351_REG_PLL_B, PLL_N_2, 0, 1);
-        si5351_set_frequency_fixedpll(
-            2, XTALFREQ * PLL_N_2, CLK2_FREQUENCY, SI5351_R_DIV_1,
-            SI5351_CLK_DRIVE_STRENGTH_2MA | SI5351_CLK_PLL_SELECT_B);
+        si5351_set_frequency_fixedpll(2, XTALFREQ * PLL_N_2, CLK2_FREQUENCY, SI5351_R_DIV_1, SI5351_CLK_DRIVE_STRENGTH_2MA | SI5351_CLK_PLL_SELECT_B);
         delay = DELAY_BANDCHANGE_1_2;
       } else {
         delay = DELAY_BAND_1_2;
       }
       // Calculate and set CH0 and CH1 divider
-      si5351_set_frequency_fixedpll(0, (uint64_t)omul * XTALFREQ * pll_n, ofreq, rdiv,
-                                    drive_strength | SI5351_CLK_PLL_SELECT_A);
-      si5351_set_frequency_fixedpll(1, (uint64_t)mul * XTALFREQ * pll_n, freq, rdiv,
-                                    drive_strength | SI5351_CLK_PLL_SELECT_A);
+      si5351_set_frequency_fixedpll(0, (uint64_t)omul * XTALFREQ * pll_n, ofreq, rdiv, drive_strength | SI5351_CLK_PLL_SELECT_A);
+      si5351_set_frequency_fixedpll(1, (uint64_t) mul * XTALFREQ * pll_n,  freq, rdiv, drive_strength | SI5351_CLK_PLL_SELECT_A);
       break;
     case 3:  // fdiv = 8, f 100-130   PLL 800-1040
     case 4:  // fdiv = 6, f 130-170   PLL 780-1050
@@ -503,29 +497,24 @@ si5351_set_frequency(uint32_t freq, uint8_t drive_strength)
 
       // Setup CH0 and CH1 constant fdiv divider at change
       if (current_band != band) {
-        si5351_setupMultisynth(0, fdiv, 0, 1, SI5351_R_DIV_1,
-                               drive_strength | SI5351_CLK_PLL_SELECT_A);
-        si5351_setupMultisynth(1, fdiv, 0, 1, SI5351_R_DIV_1,
-                               drive_strength | SI5351_CLK_PLL_SELECT_B);
+        si5351_setupMultisynth(0, fdiv, 0, 1, SI5351_R_DIV_1, drive_strength | SI5351_CLK_PLL_SELECT_A);
+        si5351_setupMultisynth(1, fdiv, 0, 1, SI5351_R_DIV_1, drive_strength | SI5351_CLK_PLL_SELECT_B);
         delay= DELAY_BANDCHANGE_3_4;
       } else {
        delay= DELAY_BAND_3_4;
       }
       // Calculate and set CH0 and CH1 PLL freq
-      si5351_setupPLL_freq(SI5351_REG_PLL_A, ofreq, fdiv,
-                           omul);  // set PLLA freq = (ofreq/omul)*fdiv
-      si5351_setupPLL_freq(SI5351_REG_PLL_B, freq, fdiv,
-                           mul);  // set PLLB freq = ( freq/ mul)*fdiv
+      si5351_setupPLL_freq(SI5351_REG_PLL_A, ofreq, fdiv, omul);  // set PLLA freq = (ofreq/omul)*fdiv
+      si5351_setupPLL_freq(SI5351_REG_PLL_B,  freq, fdiv,  mul);  // set PLLB freq = ( freq/ mul)*fdiv
       // Calculate CH2 freq = CLK2_FREQUENCY, depend from calculated before CH1 PLLB = (freq/mul)*fdiv
-      si5351_set_frequency_fixedpll(
-          2, (uint64_t)freq * fdiv, CLK2_FREQUENCY * mul, SI5351_R_DIV_1,
-          SI5351_CLK_DRIVE_STRENGTH_2MA | SI5351_CLK_PLL_SELECT_B);
+      si5351_set_frequency_fixedpll(2, (uint64_t)freq * fdiv, CLK2_FREQUENCY * mul, SI5351_R_DIV_1, SI5351_CLK_DRIVE_STRENGTH_2MA | SI5351_CLK_PLL_SELECT_B);
       break;
   }
 
   if (current_band != band) {
     // Possibly not need add delay now
-    chThdSleepMicroseconds(DELAY_RESET_PLL_AFTER);
+    if (DELAY_RESET_PLL_AFTER)
+      chThdSleepMicroseconds(DELAY_RESET_PLL_AFTER);
     si5351_reset_pll(SI5351_PLL_RESET_A|SI5351_PLL_RESET_B);
     current_band = band;
   }
